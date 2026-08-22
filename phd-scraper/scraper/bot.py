@@ -149,7 +149,7 @@ def handle_scan_command(token: str, chat_id: str | int, db_path: str, load_scrap
     notifier.send_message(summary_text, token=token, chat_id=str(chat_id), reply_markup=notifier.get_main_reply_keyboard())
 
 
-def handle_help_command(token: str, chat_id: str | int) -> None:
+def handle_help_command(token: str, chat_id: str | int, is_admin_user: bool = False) -> None:
     """Display bot command menu and help text."""
     help_text = (
         "🤖 *PhD Scraper — Menu & Commandes*\n\n"
@@ -157,14 +157,151 @@ def handle_help_command(token: str, chat_id: str | int) -> None:
         "• `/scan` ou 🔍 *Scanner* : Déclencher un scraping immédiat de toutes les sources.\n"
         "• `/latest` ou 📋 *Offres (5)* : Consulter les 5 dernières offres enregistrées.\n"
         "• `/stats` ou 📊 *Stats* : Voir les statistiques et le bilan par pays.\n"
+    )
+    if is_admin_user:
+        help_text += "• `/users` ou 👥 *Utilisateurs* : Gérer et inviter des membres (Admin).\n"
+
+    help_text += (
         "• `/help` ou ❓ *Aide* : Afficher ce menu interactif.\n\n"
         "💡 *Astuce :* Cliquez directement sur les boutons `[ ✅ Postulé ]` ou `[ 🙈 Ignorer ]` sous les offres pour mettre à jour votre suivi."
     )
-    notifier.send_message(help_text, token=token, chat_id=str(chat_id), reply_markup=notifier.get_main_reply_keyboard())
+    notifier.send_message(help_text, token=token, chat_id=str(chat_id), reply_markup=notifier.get_main_reply_keyboard(is_admin_user=is_admin_user))
+
+
+def get_bot_username(token: str) -> str:
+    """Fetch the bot's Telegram username via getMe API."""
+    url = TELEGRAM_API.format(token=token, method="getMe")
+    try:
+        resp = httpx.get(url, timeout=5)
+        if resp.status_code == 200:
+            return resp.json().get("result", {}).get("username", "")
+    except Exception as exc:
+        logger.warning("Could not fetch bot username: %s", exc)
+    return ""
+
+
+def handle_users_command(token: str, chat_id: str | int, db_path: str, super_admin_id: str | None) -> None:
+    """List all authorized users and display administration options (Admin only)."""
+    conn = db.get_connection(db_path)
+    if not db.is_admin(conn, chat_id, super_admin_id):
+        conn.close()
+        notifier.send_message("🔒 *Accès restreint* : Seuls les administrateurs peuvent gérer les utilisateurs.", token=token, chat_id=str(chat_id))
+        return
+
+    users = db.get_all_users(conn)
+    conn.close()
+
+    text = "👥 *Gestion des utilisateurs autorisés*\n\n"
+    if super_admin_id:
+        text += f"• 👑 Super Admin : `{super_admin_id}` (Propriétaire principal)\n"
+
+    if users:
+        for u in users:
+            role_icon = "👑 Admin" if u["role"] == "admin" else "👤 Membre"
+            text += f"• {role_icon} : *{u['name']}* (`{u['chat_id']}`)\n"
+    else:
+        text += "_Aucun sous-utilisateur enregistré pour le moment._\n"
+
+    text += (
+        "\n🔗 *Pour inviter par lien Telegram :*\n"
+        "Tapez simplement `/invite` pour générer un lien d'invitation cliquable.\n\n"
+        "➕ *Pour ajouter manuellement par ID :*\n"
+        "`/invite <CHAT_ID> <Nom>`\n\n"
+        "➖ *Pour révoquer un accès :*\n"
+        "`/revoke <CHAT_ID>`"
+    )
+    notifier.send_message(text, token=token, chat_id=str(chat_id), reply_markup=notifier.get_main_reply_keyboard(is_admin_user=True))
+
+
+def handle_invite_command(token: str, chat_id: str | int, text: str, db_path: str, super_admin_id: str | None) -> None:
+    """Generate a shareable Telegram invite link or add user by Chat ID (Admin only)."""
+    conn = db.get_connection(db_path)
+    if not db.is_admin(conn, chat_id, super_admin_id):
+        conn.close()
+        notifier.send_message("🔒 *Accès restreint* : Seuls les administrateurs peuvent inviter des membres.", token=token, chat_id=str(chat_id))
+        return
+
+    parts = text.split()
+
+    # If no argument given: generate shareable Deep Link!
+    if len(parts) == 1:
+        invite_token = db.create_invite_token(conn, chat_id)
+        conn.close()
+        bot_username = get_bot_username(token)
+        if bot_username:
+            invite_link = f"https://t.me/{bot_username}?start=invite_{invite_token}"
+        else:
+            invite_link = f"https://t.me/your_bot?start=invite_{invite_token}"
+
+        notifier.send_message(
+            f"🔗 *Lien d'invitation généré !*\n\n"
+            f"Transmettez ce lien à la personne que vous souhaitez inviter :\n\n"
+            f"👉 {invite_link}\n\n"
+            f"💡 *Comment ça marche ?*\n"
+            f"Dès que la personne cliquera sur ce lien et appuiera sur *Démarrer*, elle sera immédiatement autorisée et recevra les alertes !",
+            token=token, chat_id=str(chat_id)
+        )
+        return
+
+    # Manual addition: /invite <CHAT_ID> <Nom>
+    if len(parts) < 3 or not parts[1].isdigit():
+        conn.close()
+        notifier.send_message("⚠️ Syntaxe : Tapez `/invite` pour un lien, ou `/invite <CHAT_ID> <Nom>` pour l'ajout manuel.", token=token, chat_id=str(chat_id))
+        return
+
+    target_chat_id = parts[1].strip()
+    target_name = " ".join(parts[2:]).strip()
+
+    db.add_user(conn, int(target_chat_id), target_name, role="user")
+    conn.close()
+
+    notifier.send_message(
+        f"✅ *Utilisateur autorisé avec succès !*\n\n"
+        f"• Nom : *{target_name}*\n"
+        f"• Chat ID : `{target_chat_id}`\n"
+        f"• Rôle : Membre\n\n"
+        f"Cet utilisateur peut maintenant interagir avec le bot et recevoir les alertes !",
+        token=token, chat_id=str(chat_id)
+    )
+    notifier.send_message(
+        f"🎉 *Bonjour {target_name} !*\nVous avez été invité(e) sur le bot **PhD Scraper**. Tapez /start pour ouvrir votre menu.",
+        token=token, chat_id=target_chat_id, reply_markup=notifier.get_main_reply_keyboard(is_admin_user=False)
+    )
+
+
+def handle_revoke_command(token: str, chat_id: str | int, text: str, db_path: str, super_admin_id: str | None) -> None:
+    """Revoke authorization for a user (Admin only)."""
+    conn = db.get_connection(db_path)
+    if not db.is_admin(conn, chat_id, super_admin_id):
+        conn.close()
+        notifier.send_message("🔒 *Accès restreint* : Seuls les administrateurs peuvent révoquer des membres.", token=token, chat_id=str(chat_id))
+        return
+
+    parts = text.split()
+    if len(parts) < 2:
+        conn.close()
+        notifier.send_message("⚠️ Format incorrect. Syntaxe : `/revoke <CHAT_ID>`", token=token, chat_id=str(chat_id))
+        return
+
+    target_chat_id = parts[1].strip()
+    if not target_chat_id.isdigit():
+        conn.close()
+        notifier.send_message("❌ Le Chat ID doit être numérique.", token=token, chat_id=str(chat_id))
+        return
+
+    removed = db.remove_user(conn, int(target_chat_id))
+    conn.close()
+
+    if removed:
+        notifier.send_message(f"✅ Accès révoqué pour l'utilisateur ID `{target_chat_id}`.", token=token, chat_id=str(chat_id))
+    else:
+        notifier.send_message(f"ℹ️ Aucun utilisateur trouvé avec l'ID `{target_chat_id}`.", token=token, chat_id=str(chat_id))
 
 
 def process_update(update: dict[str, Any], token: str, db_path: str, load_scrapers_func: Any) -> None:
     """Dispatch incoming Telegram update (Message or Callback Query)."""
+    super_admin_id = os.environ.get("TELEGRAM_CHAT_ID")
+
     # 1. Handle Inline Button Callbacks
     if "callback_query" in update:
         cb = update["callback_query"]
@@ -176,6 +313,10 @@ def process_update(update: dict[str, Any], token: str, db_path: str, load_scrape
         orig_text = message.get("text", "")
 
         conn = db.get_connection(db_path)
+        if not db.is_user_authorized(conn, chat_id, super_admin_id):
+            conn.close()
+            answer_callback_query(token, cb_id, "🔒 Accès non autorisé")
+            return
 
         if data.startswith("apply_"):
             offer_id = int(data.split("_")[1])
@@ -204,24 +345,69 @@ def process_update(update: dict[str, Any], token: str, db_path: str, load_scrape
     if not chat_id or not text:
         return
 
-    # Authorized chat filter check if set
-    allowed_chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-    if allowed_chat_id and str(chat_id) != str(allowed_chat_id):
-        logger.warning("Ignored message from unauthorized chat_id: %s", chat_id)
-        return
-
     text_lower = text.lower()
 
+    # Handle Deep Link Start (/start invite_<token>)
+    if text_lower.startswith("/start invite_") or text_lower.startswith("start invite_"):
+        token_str = text.split("invite_")[-1].strip()
+        user_name = msg.get("from", {}).get("first_name", "Membre")
+
+        conn = db.get_connection(db_path)
+        consumed = db.validate_and_consume_token(conn, token_str, chat_id, user_name)
+        conn.close()
+
+        if consumed:
+            welcome_msg = (
+                f"🎉 *Bienvenue {user_name} !*\n\n"
+                "Votre accès au bot **PhD Scraper** a été activé avec succès via le lien d'invitation !\n\n"
+                "Tapez /help ou utilisez les boutons ci-dessous pour explorer les offres doctorales."
+            )
+            notifier.send_message(welcome_msg, token=token, chat_id=str(chat_id), reply_markup=notifier.get_main_reply_keyboard(is_admin_user=False))
+
+            admin_target = super_admin_id or str(chat_id)
+            notifier.send_message(
+                f"🎉 *Nouvel utilisateur rejoint !*\n\n*{user_name}* (ID: `{chat_id}`) vient de rejoindre le bot via votre lien d'invitation !",
+                token=token, chat_id=str(admin_target)
+            )
+            return
+        else:
+            notifier.send_message("⚠️ *Lien d'invitation invalide ou déjà utilisé.* Veuillez demander un nouveau lien à l'administrateur.", token=token, chat_id=str(chat_id))
+            return
+
+    conn = db.get_connection(db_path)
+    authorized = db.is_user_authorized(conn, chat_id, super_admin_id)
+    admin_user = db.is_admin(conn, chat_id, super_admin_id)
+    conn.close()
+
+    if not authorized:
+        logger.warning("Ignored message from unauthorized chat_id: %s", chat_id)
+        unauth_msg = (
+            "🔒 *Accès restreint*\n\n"
+            f"Votre Chat ID est : `{chat_id}`\n"
+            "Transmettez cet ID à l'administrateur du bot pour obtenir l'accès aux offres doctorales."
+        )
+        notifier.send_message(unauth_msg, token=token, chat_id=str(chat_id))
+        return
+
+    first_word = text_lower.split()[0]
+
     if text_lower in ["/start", "/help", "❓ aide", "aide", "help"]:
-        handle_help_command(token, chat_id)
+        handle_help_command(token, chat_id, is_admin_user=admin_user)
     elif text_lower in ["/scan", "🔍 scanner", "scanner", "scan"]:
         handle_scan_command(token, chat_id, db_path, load_scrapers_func)
     elif text_lower in ["/latest", "/list", "📋 offres (5)", "offres", "latest"]:
         handle_latest_command(token, chat_id, db_path)
     elif text_lower in ["/stats", "📊 stats", "stats", "statistiques"]:
         handle_stats_command(token, chat_id, db_path)
+    elif text_lower in ["/users", "👥 utilisateurs", "utilisateurs", "users"]:
+        handle_users_command(token, chat_id, db_path, super_admin_id)
+    elif first_word == "/invite":
+        handle_invite_command(token, chat_id, text, db_path, super_admin_id)
+    elif first_word == "/revoke":
+        handle_revoke_command(token, chat_id, text, db_path, super_admin_id)
     else:
-        handle_help_command(token, chat_id)
+        handle_help_command(token, chat_id, is_admin_user=admin_user)
+
 
 
 def run_bot_polling(token: str | None = None, db_path: str | None = None, load_scrapers_func: Any = None) -> None:
@@ -260,3 +446,4 @@ def run_bot_polling(token: str | None = None, db_path: str | None = None, load_s
         except Exception as exc:
             logger.error("Unexpected error in bot listener loop: %s", exc)
             time.sleep(3)
+

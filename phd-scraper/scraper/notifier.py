@@ -32,6 +32,7 @@ def register_bot_commands(token: str | None = None) -> bool:
         {"command": "scan", "description": "🔍 Lancer un scan des opportunités"},
         {"command": "latest", "description": "📋 Voir les dernières offres doctorales"},
         {"command": "stats", "description": "📊 Voir les statistiques des offres"},
+        {"command": "users", "description": "👥 Gérer les utilisateurs autorisés (Admin)"},
         {"command": "help", "description": "❓ Aide et liste des commandes"},
     ]
     try:
@@ -44,16 +45,22 @@ def register_bot_commands(token: str | None = None) -> bool:
         return False
 
 
-def get_main_reply_keyboard() -> dict[str, Any]:
+
+def get_main_reply_keyboard(is_admin_user: bool = True) -> dict[str, Any]:
     """Return persistent reply keyboard with visual action buttons."""
+    rows = [
+        [{"text": "🔍 Scanner"}, {"text": "📋 Offres (5)"}],
+        [{"text": "📊 Stats"}, {"text": "❓ Aide"}],
+    ]
+    if is_admin_user:
+        rows.append([{"text": "👥 Utilisateurs"}])
+
     return {
-        "keyboard": [
-            [{"text": "🔍 Scanner"}, {"text": "📋 Offres (5)"}],
-            [{"text": "📊 Stats"}, {"text": "❓ Aide"}],
-        ],
+        "keyboard": rows,
         "resize_keyboard": True,
         "is_persistent": True,
     }
+
 
 
 def get_offer_inline_keyboard(offer_id: int, offer_url: str | None = None) -> dict[str, Any]:
@@ -108,15 +115,17 @@ def send_notifications(
     new_offer_rows: Sequence[sqlite3.Row],
     token: str | None = None,
     chat_id: str | None = None,
+    db_path: str | None = None,
 ) -> list[int]:
     """
     Send Telegram notifications for new offers.
+    Broadcasts notifications to all authorized users.
     Returns the list of offer IDs that were successfully notified.
     """
     token = token or os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    chat_id = chat_id or os.environ.get("TELEGRAM_CHAT_ID", "")
+    primary_chat_id = chat_id or os.environ.get("TELEGRAM_CHAT_ID", "")
 
-    if not token or not chat_id:
+    if not token or not primary_chat_id:
         logger.warning("TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set — skipping notifications.")
         return []
 
@@ -124,34 +133,53 @@ def send_notifications(
         logger.info("No new offers to notify.")
         return []
 
+    # Collect target chat_ids (Primary admin + authorized DB users)
+    target_chat_ids: list[str] = [str(primary_chat_id).strip()]
+    
+    db_path = db_path or os.environ.get("DB_PATH", "data/offers.db")
+    try:
+        from scraper import db
+        conn = db.get_connection(db_path)
+        db_users = db.get_all_users(conn)
+        conn.close()
+        for u in db_users:
+            cid = str(u["chat_id"]).strip()
+            if cid not in target_chat_ids:
+                target_chat_ids.append(cid)
+    except Exception as exc:
+        logger.debug("Could not fetch database user list for notification broadcast: %s", exc)
+
     # Register commands dynamically
     register_bot_commands(token)
 
     notified_ids: list[int] = []
 
-    if len(new_offer_rows) <= BATCH_THRESHOLD:
-        for row in new_offer_rows:
-            text = _build_offer_text(row)
-            kb = get_offer_inline_keyboard(row["id"], row["url"])
-            if send_message(text, token=token, chat_id=chat_id, reply_markup=kb):
-                notified_ids.append(row["id"])
-    else:
-        header = (
-            f"📬 *{len(new_offer_rows)} nouvelles offres PhD trouvées !*\n"
-            "Voici le récapitulatif :\n\n"
-        )
-        blocks = [_build_offer_text(row) for row in new_offer_rows]
-        separator = "\n\n" + "─" * 30 + "\n\n"
-        full_text = header + separator.join(blocks)
+    for target_cid in target_chat_ids:
+        if len(new_offer_rows) <= BATCH_THRESHOLD:
+            for row in new_offer_rows:
+                text = _build_offer_text(row)
+                kb = get_offer_inline_keyboard(row["id"], row["url"])
+                if send_message(text, token=token, chat_id=target_cid, reply_markup=kb):
+                    if row["id"] not in notified_ids:
+                        notified_ids.append(row["id"])
+        else:
+            header = (
+                f"📬 *{len(new_offer_rows)} nouvelles offres PhD trouvées !*\n"
+                "Voici le récapitulatif :\n\n"
+            )
+            blocks = [_build_offer_text(row) for row in new_offer_rows]
+            separator = "\n\n" + "─" * 30 + "\n\n"
+            full_text = header + separator.join(blocks)
 
-        if len(full_text) > MAX_MSG_LEN:
-            full_text = full_text[:MAX_MSG_LEN] + "\n…(tronqué)"
+            if len(full_text) > MAX_MSG_LEN:
+                full_text = full_text[:MAX_MSG_LEN] + "\n…(tronqué)"
 
-        if send_message(full_text, token=token, chat_id=chat_id):
-            notified_ids = [row["id"] for row in new_offer_rows]
+            if send_message(full_text, token=token, chat_id=target_cid):
+                notified_ids = [row["id"] for row in new_offer_rows]
 
-    logger.info("Notifications sent for %d/%d offers.", len(notified_ids), len(new_offer_rows))
+    logger.info("Notifications sent for %d/%d offers to %d recipient(s).", len(notified_ids), len(new_offer_rows), len(target_chat_ids))
     return notified_ids
+
 
 
 def send_message(
