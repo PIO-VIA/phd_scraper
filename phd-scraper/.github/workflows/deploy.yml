@@ -105,7 +105,7 @@ jobs:
           port: ${{ secrets.VPS_PORT || 22 }}
           script: |
             set -e
-            APP_DIR="/opt/phd-scraper"
+            APP_DIR="~/phd-scraper"
             LOWER_REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
             IMAGE_URI="ghcr.io/${LOWER_REPO}:latest"
 
