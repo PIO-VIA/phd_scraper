@@ -218,6 +218,17 @@ def cmd_test_notify(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# bot command
+# ---------------------------------------------------------------------------
+
+def cmd_bot(args: argparse.Namespace) -> None:
+    db_path = os.environ.get("DB_PATH", "data/offers.db")
+    db.init_db(db_path)
+    from scraper.bot import run_bot_polling
+    run_bot_polling(db_path=db_path, load_scrapers_func=load_scrapers)
+
+
+# ---------------------------------------------------------------------------
 # CLI wiring
 # ---------------------------------------------------------------------------
 
@@ -229,6 +240,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("scan", help="Run a full scraping + notification cycle.")
+    sub.add_parser("bot", help="Run the interactive Telegram bot daemon.")
 
     list_p = sub.add_parser("list", help="List stored offers.")
     list_p.add_argument(
@@ -255,6 +267,7 @@ def main() -> None:
 
     dispatch = {
         "scan": cmd_scan,
+        "bot": cmd_bot,
         "list": cmd_list,
         "mark": cmd_mark,
         "test-notify": cmd_test_notify,
@@ -264,3 +277,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

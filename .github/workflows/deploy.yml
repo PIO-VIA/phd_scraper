@@ -135,15 +135,19 @@ jobs:
             echo "▶ Pulling latest image: ${IMAGE_URI}..."
             docker pull "${IMAGE_URI}"
 
-            echo "▶ Running test scan..."
-            docker run --rm \
+            echo "▶ Starting interactive Telegram Bot daemon..."
+            docker rm -f phd-scraper-bot || true
+            docker run -d \
+              --name phd-scraper-bot \
+              --restart=always \
               --env-file "${APP_DIR}/.env" \
               -v "${APP_DIR}/data:/app/data" \
               -v "${APP_DIR}/logs:/app/logs" \
-              "${IMAGE_URI}" scan
+              "${IMAGE_URI}" bot
 
             echo "▶ Configuring daily Cron job on VPS (07:00 UTC)..."
             CRON_CMD="0 7 * * * docker run --rm --env-file ${APP_DIR}/.env -v ${APP_DIR}/data:/app/data -v ${APP_DIR}/logs:/app/logs ${IMAGE_URI} scan >> ${APP_DIR}/logs/cron.log 2>&1"
             (crontab -l 2>/dev/null | grep -v "phd-scraper" ; echo "$CRON_CMD") | crontab -
 
             echo "✅ Deployment on Contabo VPS finished successfully!"
+
