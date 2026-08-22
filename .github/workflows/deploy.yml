@@ -27,13 +27,16 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
+          cache-dependency-path: "phd-scraper/requirements.txt"
 
       - name: Install Dependencies
+        working-directory: phd-scraper
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Run Pytest with Coverage
+        working-directory: phd-scraper
         run: |
           pytest --cov=scraper --cov-report=term-missing
 
@@ -75,8 +78,8 @@ jobs:
       - name: Build and Push Docker Image
         uses: docker/build-push-action@v5
         with:
-          context: .
-          file: ./Dockerfile
+          context: ./phd-scraper
+          file: ./phd-scraper/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -105,7 +108,7 @@ jobs:
           port: ${{ secrets.VPS_PORT || 22 }}
           script: |
             set -e
-            APP_DIR="~/phd-scraper"
+            APP_DIR="$HOME/phd-scraper"
             LOWER_REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
             IMAGE_URI="ghcr.io/${LOWER_REPO}:latest"
 
@@ -124,8 +127,10 @@ jobs:
             EOF
             fi
 
-            echo "▶ Logging into GHCR..."
-            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+            echo "▶ Logging into GHCR if credentials available..."
+            if [ -n "${{ secrets.GHCR_TOKEN }}" ]; then
+              echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin || true
+            fi
 
             echo "▶ Pulling latest image: ${IMAGE_URI}..."
             docker pull "${IMAGE_URI}"
