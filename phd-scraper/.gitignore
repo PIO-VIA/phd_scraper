@@ -1,0 +1,11 @@
+data/offers.db
+logs/
+.env
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+dist/
+*.egg-info/
+.venv

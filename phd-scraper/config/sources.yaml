@@ -1,0 +1,55 @@
+sources:
+  - name: euraxess
+    module: scraper.sources.euraxess
+    class: EuraxessScraper
+    enabled: true
+
+  - name: inria
+    module: scraper.sources.inria
+    class: InriaScraper
+    enabled: true
+
+  - name: daad_phdgermany
+    module: scraper.sources.daad_phdgermany
+    class: DaadScraper
+    enabled: true
+
+  - name: cnrs
+    module: scraper.sources.cnrs
+    class: CnrsScraper
+    enabled: true
+
+  - name: fraunhofer
+    module: scraper.sources.fraunhofer
+    class: FraunhoferScraper
+    enabled: true
+
+  - name: max_planck
+    module: scraper.sources.max_planck
+    class: MaxPlanckScraper
+    enabled: true
+
+  - name: adum
+    module: scraper.sources.adum
+    class: AdumScraper
+    enabled: true
+
+  - name: campusfrance
+    module: scraper.sources.campusfrance
+    class: CampusFranceScraper
+    enabled: true
+
+  - name: lab_tum_dse
+    module: scraper.sources.lab_tum_dse
+    class: TumDseScraper
+    enabled: true
+
+  - name: lab_tuda_systems
+    module: scraper.sources.lab_tuda_systems
+    class: TudaSystemsScraper
+    enabled: true
+
+  - name: lab_rwth_comsys
+    module: scraper.sources.lab_rwth_comsys
+    class: RwthComSysScraper
+    enabled: true

@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  phd-scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: phd-scraper
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./config:/app/config
+    restart: "no"

@@ -1,0 +1,21 @@
+include:
+  - "cloud computing"
+  - "distributed systems"
+  - "cloud-native"
+  - "systems research"
+  - "distributed computing"
+  - "dependable systems"
+  - "infrastructure systems"
+  - "networked systems"
+  - "edge computing"
+  - "reliability and resilience"
+  - "observability"
+  - "resource management"
+  - "platform automation"
+  - "kubernetes"
+  - "microservices"
+  - "data center systems"
+
+exclude:
+  - "clinical"
+  - "biomedical"

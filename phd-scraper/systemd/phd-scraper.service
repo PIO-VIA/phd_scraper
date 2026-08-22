@@ -1,0 +1,14 @@
+[Unit]
+Description=PhD Opportunity Scraper Scan Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/phd-scraper
+ExecStart=/opt/phd-scraper/.venv/bin/python -m scraper.run scan
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,144 @@
+name: CI/CD Pipeline — Test, Build & Deploy to Contabo VPS
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: Run Pytest Suite
+  # ---------------------------------------------------------------------------
+  test:
+    name: 🧪 Run Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Pytest with Coverage
+        run: |
+          pytest --cov=scraper --cov-report=term-missing
+
+  # ---------------------------------------------------------------------------
+  # Job 2: Build & Push Docker Image to GHCR
+  # ---------------------------------------------------------------------------
+  build-and-push:
+    name: 🐳 Build & Push Docker Image
+    needs: test
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker Metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ---------------------------------------------------------------------------
+  # Job 3: Deploy Image to Contabo VPS over SSH
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: 🚀 Deploy to Contabo VPS
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Deploy to VPS via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            set -e
+            APP_DIR="/opt/phd-scraper"
+            LOWER_REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+            IMAGE_URI="ghcr.io/${LOWER_REPO}:latest"
+
+            echo "▶ Preparing directory structure on VPS..."
+            mkdir -p "${APP_DIR}/data" "${APP_DIR}/logs" "${APP_DIR}/config"
+
+            # Create default .env if missing
+            if [ ! -f "${APP_DIR}/.env" ]; then
+              echo "Creating default .env file on VPS..."
+              cat << 'EOF' > "${APP_DIR}/.env"
+            TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
+            TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}
+            DB_PATH=data/offers.db
+            LOG_DIR=logs
+            USER_AGENT=PIO-PhD-Scraper/1.0 (contact: your-email@example.com)
+            EOF
+            fi
+
+            echo "▶ Logging into GHCR..."
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+            echo "▶ Pulling latest image: ${IMAGE_URI}..."
+            docker pull "${IMAGE_URI}"
+
+            echo "▶ Running test scan..."
+            docker run --rm \
+              --env-file "${APP_DIR}/.env" \
+              -v "${APP_DIR}/data:/app/data" \
+              -v "${APP_DIR}/logs:/app/logs" \
+              "${IMAGE_URI}" scan
+
+            echo "▶ Configuring daily Cron job on VPS (07:00 UTC)..."
+            CRON_CMD="0 7 * * * docker run --rm --env-file ${APP_DIR}/.env -v ${APP_DIR}/data:/app/data -v ${APP_DIR}/logs:/app/logs ${IMAGE_URI} scan >> ${APP_DIR}/logs/cron.log 2>&1"
+            (crontab -l 2>/dev/null | grep -v "phd-scraper" ; echo "$CRON_CMD") | crontab -
+
+            echo "✅ Deployment on Contabo VPS finished successfully!"
