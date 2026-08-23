@@ -335,14 +335,57 @@ def process_update(update: dict[str, Any], token: str, db_path: str, load_scrape
                 edit_message_text(token, chat_id, message_id, new_text)
 
         conn.close()
-        return
-
-    # 2. Handle Text Messages & Commands
+    # 2. Handle Shared Contact, User Picker, & Messages
     msg = update.get("message", {})
-    text = msg.get("text", "").strip()
     chat_id = msg.get("chat", {}).get("id")
 
-    if not chat_id or not text:
+    if not chat_id:
+        return
+
+    if "user_shared" in msg or "contact" in msg:
+
+        conn = db.get_connection(db_path)
+        if not db.is_admin(conn, chat_id, super_admin_id):
+            conn.close()
+            notifier.send_message("🔒 *Accès restreint* : Seuls les administrateurs peuvent inviter des contacts.", token=token, chat_id=str(chat_id))
+            return
+
+        target_user_id = None
+        target_name = "Membre"
+
+        if "user_shared" in msg:
+            target_user_id = msg["user_shared"].get("user_id")
+        elif "contact" in msg:
+            c = msg["contact"]
+            target_user_id = c.get("user_id")
+            first_name = c.get("first_name", "")
+            last_name = c.get("last_name", "")
+            target_name = f"{first_name} {last_name}".strip() or "Membre"
+
+        if not target_user_id:
+            conn.close()
+            notifier.send_message("⚠️ Impossible de récupérer l'identifiant Telegram de ce contact.", token=token, chat_id=str(chat_id))
+            return
+
+        db.add_user(conn, int(target_user_id), target_name, role="user")
+        conn.close()
+
+        notifier.send_message(
+            f"📱 *Contact ajouté et autorisé avec succès !*\n\n"
+            f"• Nom : *{target_name}*\n"
+            f"• Telegram ID : `{target_user_id}`\n"
+            f"• Statut : Autorisé ✅\n\n"
+            f"Cet utilisateur est immédiatement autorisé et recevra les futures alerte d'offres PhD !",
+            token=token, chat_id=str(chat_id), reply_markup=notifier.get_main_reply_keyboard(is_admin_user=True)
+        )
+        notifier.send_message(
+            f"🎉 *Bonjour {target_name} !*\nVous avez été invité(e) et autorisé(e) sur le bot **PhD Scraper**. Tapez /start pour ouvrir votre menu !",
+            token=token, chat_id=str(target_user_id), reply_markup=notifier.get_main_reply_keyboard(is_admin_user=False)
+        )
+        return
+
+    text = msg.get("text", "").strip()
+    if not text:
         return
 
     text_lower = text.lower()
@@ -377,6 +420,12 @@ def process_update(update: dict[str, Any], token: str, db_path: str, load_scrape
     conn = db.get_connection(db_path)
     authorized = db.is_user_authorized(conn, chat_id, super_admin_id)
     admin_user = db.is_admin(conn, chat_id, super_admin_id)
+
+    # Auto update user first name if available
+    user_first_name = msg.get("from", {}).get("first_name")
+    if user_first_name and authorized:
+        db.add_user(conn, chat_id, user_first_name, role="admin" if admin_user else "user")
+
     conn.close()
 
     if not authorized:
@@ -407,6 +456,7 @@ def process_update(update: dict[str, Any], token: str, db_path: str, load_scrape
         handle_revoke_command(token, chat_id, text, db_path, super_admin_id)
     else:
         handle_help_command(token, chat_id, is_admin_user=admin_user)
+
 
 
 

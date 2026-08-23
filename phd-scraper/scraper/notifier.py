@@ -47,19 +47,23 @@ def register_bot_commands(token: str | None = None) -> bool:
 
 
 def get_main_reply_keyboard(is_admin_user: bool = True) -> dict[str, Any]:
-    """Return persistent reply keyboard with visual action buttons."""
+    """Return persistent reply keyboard with visual action buttons including contact picker for admin."""
     rows = [
         [{"text": "🔍 Scanner"}, {"text": "📋 Offres (5)"}],
         [{"text": "📊 Stats"}, {"text": "❓ Aide"}],
     ]
     if is_admin_user:
-        rows.append([{"text": "👥 Utilisateurs"}])
+        rows.append([
+            {"text": "📱 Inviter un contact", "request_user": {"request_id": 1, "user_is_bot": False}},
+            {"text": "👥 Utilisateurs"},
+        ])
 
     return {
         "keyboard": rows,
         "resize_keyboard": True,
         "is_persistent": True,
     }
+
 
 
 

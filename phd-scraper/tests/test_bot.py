@@ -13,7 +13,8 @@ class TestNotifierButtons:
         assert "keyboard" in kb
         assert len(kb["keyboard"]) == 3
         assert kb["keyboard"][0][0]["text"] == "🔍 Scanner"
-        assert kb["keyboard"][2][0]["text"] == "👥 Utilisateurs"
+        assert kb["keyboard"][2][0]["text"] == "📱 Inviter un contact"
+        assert kb["keyboard"][2][1]["text"] == "👥 Utilisateurs"
 
     def test_get_offer_inline_keyboard(self):
         kb = notifier.get_offer_inline_keyboard(42, "https://example.com/phd")
@@ -113,7 +114,6 @@ class TestBotHandlers:
         monkeypatch.setattr(notifier, "send_message", fake_send)
         monkeypatch.setenv("TELEGRAM_CHAT_ID", "12345")
 
-        # Guest clicks invite link -> /start invite_<token>
         update = {
             "message": {
                 "chat": {"id": 654321},
@@ -127,7 +127,39 @@ class TestBotHandlers:
         assert "Bienvenue Dave" in sent_messages[0][1]
         assert "Nouvel utilisateur rejoint" in sent_messages[1][1]
 
-        # Verify user is now authorized
         conn = db.get_connection(db_file)
         assert db.is_user_authorized(conn, 654321)
+        conn.close()
+
+    def test_contact_picker_invitation(self, monkeypatch, tmp_path):
+        db_file = tmp_path / "test.db"
+        db.init_db(db_file)
+
+        sent_messages = []
+
+        def fake_send(text, token=None, chat_id=None, reply_markup=None):
+            sent_messages.append((chat_id, text))
+
+        monkeypatch.setattr(notifier, "send_message", fake_send)
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "12345")
+
+        # Admin shares a contact via button
+        update = {
+            "message": {
+                "chat": {"id": 12345},
+                "contact": {
+                    "user_id": 555123,
+                    "first_name": "Sophie",
+                    "last_name": "Martin",
+                },
+            }
+        }
+        bot.process_update(update, "fake_token", str(db_file), None)
+
+        assert len(sent_messages) == 2
+        assert "Sophie Martin" in sent_messages[0][1]
+        assert "Bonjour Sophie Martin" in sent_messages[1][1]
+
+        conn = db.get_connection(db_path=db_file)
+        assert db.is_user_authorized(conn, 555123)
         conn.close()
