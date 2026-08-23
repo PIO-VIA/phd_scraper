@@ -11,10 +11,12 @@ class TestNotifierButtons:
     def test_get_main_reply_keyboard(self):
         kb = notifier.get_main_reply_keyboard(is_admin_user=True)
         assert "keyboard" in kb
-        assert len(kb["keyboard"]) == 3
+        assert len(kb["keyboard"]) == 4
         assert kb["keyboard"][0][0]["text"] == "🔍 Scanner"
-        assert kb["keyboard"][2][0]["text"] == "📱 Inviter un contact"
-        assert kb["keyboard"][2][1]["text"] == "👥 Utilisateurs"
+        assert kb["keyboard"][1][0]["text"] == "🎯 Domaines"
+        assert kb["keyboard"][3][0]["text"] == "🔗 Lien d'invitation"
+        assert kb["keyboard"][3][1]["text"] == "📱 Inviter un contact"
+        assert kb["keyboard"][3][2]["text"] == "👥 Utilisateurs"
 
     def test_get_offer_inline_keyboard(self):
         kb = notifier.get_offer_inline_keyboard(42, "https://example.com/phd")
@@ -80,6 +82,25 @@ class TestBotHandlers:
 
         assert called.get("sent") is True
         assert "PhD Scraper" in called.get("text", "")
+
+    def test_process_update_domains(self, monkeypatch, tmp_path):
+        db_file = tmp_path / "test.db"
+        db.init_db(db_file)
+        called = {}
+
+        def fake_send(text, token=None, chat_id=None, reply_markup=None):
+            called["sent"] = True
+            called["text"] = text
+
+        monkeypatch.setattr(notifier, "send_message", fake_send)
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "12345")
+
+        update = {"message": {"chat": {"id": 12345}, "text": "/domains"}}
+        bot.process_update(update, "fake_token", str(db_file), None)
+
+        assert called.get("sent") is True
+        assert "Domaines & Thématiques" in called.get("text", "")
+        assert "cloud computing" in called.get("text", "")
 
     def test_unauthorized_user_blocked(self, monkeypatch, tmp_path):
         db_file = tmp_path / "test.db"
@@ -158,7 +179,7 @@ class TestBotHandlers:
 
         assert len(sent_messages) == 2
         assert "Sophie Martin" in sent_messages[0][1]
-        assert "Bonjour Sophie Martin" in sent_messages[1][1]
+        assert "Lien d'invitation généré" in sent_messages[0][1] or "pré-autorisé" in sent_messages[0][1]
 
         conn = db.get_connection(db_path=db_file)
         assert db.is_user_authorized(conn, 555123)

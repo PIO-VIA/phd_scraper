@@ -11,6 +11,7 @@ import time
 from typing import Any
 
 import httpx
+from urllib.parse import quote
 
 from scraper import db, notifier, filters
 from scraper.models import Offer
@@ -149,6 +150,35 @@ def handle_scan_command(token: str, chat_id: str | int, db_path: str, load_scrap
     notifier.send_message(summary_text, token=token, chat_id=str(chat_id), reply_markup=notifier.get_main_reply_keyboard())
 
 
+def handle_domains_command(token: str, chat_id: str | int, is_admin_user: bool = False, config_path: str | None = None) -> None:
+    """Display research domains and keywords currently monitored by the bot."""
+    keywords_data = filters.load_keywords(config_path)
+    includes = keywords_data.get("include", [])
+    excludes = keywords_data.get("exclude", [])
+
+    text = (
+        "🎯 *Domaines & Thématiques de Recherche Suivis*\n\n"
+        "Le bot **PhD Scraper** surveille et filtre automatiquement les offres de thèse (PhD) en *Informatique / Systèmes*.\n\n"
+        "📌 *Thématiques & Mots-clés recherchés (Include) :*\n"
+    )
+    if includes:
+        for kw in includes:
+            text += f"• `{kw}`\n"
+    else:
+        text += "_Aucun mot-clé configuré (toutes les offres sont acceptées)._\n"
+
+    if excludes:
+        text += "\n🚫 *Thématiques / Mots-clés exclus (Exclude) :*\n"
+        for kw in excludes:
+            text += f"• `{kw}`\n"
+
+    text += (
+        "\n💡 *Principe du filtre :*\n"
+        "Une offre est validée et notifiée uniquement si son titre ou sa description contient **au moins un** mot-clé recherché et **aucun** mot-clé exclu."
+    )
+    notifier.send_message(text, token=token, chat_id=str(chat_id), reply_markup=notifier.get_main_reply_keyboard(is_admin_user=is_admin_user))
+
+
 def handle_help_command(token: str, chat_id: str | int, is_admin_user: bool = False) -> None:
     """Display bot command menu and help text."""
     help_text = (
@@ -156,6 +186,7 @@ def handle_help_command(token: str, chat_id: str | int, is_admin_user: bool = Fa
         "Vous pouvez taper une commande ou utiliser les boutons ci-dessous :\n\n"
         "• `/scan` ou 🔍 *Scanner* : Déclencher un scraping immédiat de toutes les sources.\n"
         "• `/latest` ou 📋 *Offres (5)* : Consulter les 5 dernières offres enregistrées.\n"
+        "• `/domains` ou 🎯 *Domaines* : Consulter les thématiques de recherche suivies.\n"
         "• `/stats` ou 📊 *Stats* : Voir les statistiques et le bilan par pays.\n"
     )
     if is_admin_user:
@@ -222,9 +253,10 @@ def handle_invite_command(token: str, chat_id: str | int, text: str, db_path: st
         return
 
     parts = text.split()
+    text_lower = text.lower()
 
-    # If no argument given: generate shareable Deep Link!
-    if len(parts) == 1:
+    # Generate shareable Deep Link if no argument or triggered via button / command
+    if len(parts) == 1 or text_lower in ["/invite", "🔗 lien d'invitation", "lien d'invitation", "inviter"]:
         invite_token = db.create_invite_token(conn, chat_id)
         conn.close()
         bot_username = get_bot_username(token)
@@ -233,13 +265,17 @@ def handle_invite_command(token: str, chat_id: str | int, text: str, db_path: st
         else:
             invite_link = f"https://t.me/your_bot?start=invite_{invite_token}"
 
+        share_msg = "Rejoins-moi sur le bot PhD Scraper pour recevoir les alertes d'offres doctorales !"
+        share_url = f"https://t.me/share/url?url={quote(invite_link)}&text={quote(share_msg)}"
+        reply_markup = {"inline_keyboard": [[{"text": "🚀 Transmettre l'invitation", "url": share_url}]]}
+
         notifier.send_message(
             f"🔗 *Lien d'invitation généré !*\n\n"
-            f"Transmettez ce lien à la personne que vous souhaitez inviter :\n\n"
+            f"Voici votre lien d'accès à transmettre :\n\n"
             f"👉 {invite_link}\n\n"
-            f"💡 *Comment ça marche ?*\n"
-            f"Dès que la personne cliquera sur ce lien et appuiera sur *Démarrer*, elle sera immédiatement autorisée et recevra les alertes !",
-            token=token, chat_id=str(chat_id)
+            f"💡 *Comment l'envoyer ?*\n"
+            f"Cliquez sur le bouton **🚀 Transmettre l'invitation** ci-dessous pour choisir le destinataire directement dans Telegram !",
+            token=token, chat_id=str(chat_id), reply_markup=reply_markup
         )
         return
 
@@ -253,20 +289,32 @@ def handle_invite_command(token: str, chat_id: str | int, text: str, db_path: st
     target_name = " ".join(parts[2:]).strip()
 
     db.add_user(conn, int(target_chat_id), target_name, role="user")
+    invite_token = db.create_invite_token(conn, chat_id)
     conn.close()
 
+    bot_username = get_bot_username(token)
+    invite_link = f"https://t.me/{bot_username}?start=invite_{invite_token}" if bot_username else f"https://t.me/your_bot?start=invite_{invite_token}"
+    share_msg = f"Bonjour {target_name}, rejoins-moi sur PhD Scraper pour recevoir les alertes doctorales !"
+    share_url = f"https://t.me/share/url?url={quote(invite_link)}&text={quote(share_msg)}"
+    reply_markup = {"inline_keyboard": [[{"text": f"🚀 Transmettre à {target_name}", "url": share_url}]]}
+
     notifier.send_message(
-        f"✅ *Utilisateur autorisé avec succès !*\n\n"
+        f"✅ *Utilisateur pré-autorisé avec succès !*\n\n"
         f"• Nom : *{target_name}*\n"
         f"• Chat ID : `{target_chat_id}`\n"
         f"• Rôle : Membre\n\n"
-        f"Cet utilisateur peut maintenant interagir avec le bot et recevoir les alertes !",
-        token=token, chat_id=str(chat_id)
+        f"🔗 *Lien d'invitation dédié :*\n{invite_link}\n\n"
+        f"💡 Transmettez ce lien à *{target_name}* via le bouton ci-dessous.",
+        token=token, chat_id=str(chat_id), reply_markup=reply_markup
     )
-    notifier.send_message(
-        f"🎉 *Bonjour {target_name} !*\nVous avez été invité(e) sur le bot **PhD Scraper**. Tapez /start pour ouvrir votre menu.",
-        token=token, chat_id=target_chat_id, reply_markup=notifier.get_main_reply_keyboard(is_admin_user=False)
-    )
+
+    try:
+        notifier.send_message(
+            f"🎉 *Bonjour {target_name} !*\nVous avez été invité(e) sur le bot **PhD Scraper**. Tapez /start pour ouvrir votre menu.",
+            token=token, chat_id=target_chat_id, reply_markup=notifier.get_main_reply_keyboard(is_admin_user=False)
+        )
+    except Exception as exc:
+        logger.debug("Direct message to user failed (normal if chat not opened yet): %s", exc)
 
 
 def handle_revoke_command(token: str, chat_id: str | int, text: str, db_path: str, super_admin_id: str | None) -> None:
@@ -368,20 +416,34 @@ def process_update(update: dict[str, Any], token: str, db_path: str, load_scrape
             return
 
         db.add_user(conn, int(target_user_id), target_name, role="user")
+        invite_token = db.create_invite_token(conn, chat_id)
         conn.close()
 
-        notifier.send_message(
-            f"📱 *Contact ajouté et autorisé avec succès !*\n\n"
+        bot_username = get_bot_username(token)
+        invite_link = f"https://t.me/{bot_username}?start=invite_{invite_token}" if bot_username else f"https://t.me/your_bot?start=invite_{invite_token}"
+
+        share_msg = f"Bonjour {target_name}, rejoins-moi sur le bot PhD Scraper pour recevoir les alertes d'offres doctorales !"
+        share_url = f"https://t.me/share/url?url={quote(invite_link)}&text={quote(share_msg)}"
+        reply_markup = {"inline_keyboard": [[{"text": f"🚀 Transmettre l'invitation à {target_name}", "url": share_url}]]}
+
+        admin_response = (
+            f"📱 *Contact pré-autorisé avec succès !*\n\n"
             f"• Nom : *{target_name}*\n"
             f"• Telegram ID : `{target_user_id}`\n"
             f"• Statut : Autorisé ✅\n\n"
-            f"Cet utilisateur est immédiatement autorisé et recevra les futures alerte d'offres PhD !",
-            token=token, chat_id=str(chat_id), reply_markup=notifier.get_main_reply_keyboard(is_admin_user=True)
+            f"⚠️ *Remarque Telegram :* Les bots ne peuvent pas initier de message direct avec un utilisateur sans interaction préalable.\n\n"
+            f"👉 *Lien d'invitation généré pour {target_name} :*\n{invite_link}\n\n"
+            f"Cliquez sur le bouton ci-dessous pour lui transmettre le lien d'activation en 1 clic !"
         )
-        notifier.send_message(
-            f"🎉 *Bonjour {target_name} !*\nVous avez été invité(e) et autorisé(e) sur le bot **PhD Scraper**. Tapez /start pour ouvrir votre menu !",
-            token=token, chat_id=str(target_user_id), reply_markup=notifier.get_main_reply_keyboard(is_admin_user=False)
-        )
+        notifier.send_message(admin_response, token=token, chat_id=str(chat_id), reply_markup=reply_markup)
+
+        try:
+            notifier.send_message(
+                f"🎉 *Bonjour {target_name} !*\nVous avez été invité(e) et autorisé(e) sur le bot **PhD Scraper**. Tapez /start pour ouvrir votre menu !",
+                token=token, chat_id=str(target_user_id), reply_markup=notifier.get_main_reply_keyboard(is_admin_user=False)
+            )
+        except Exception as exc:
+            logger.debug("Direct message to contact failed (normal if chat not opened yet): %s", exc)
         return
 
     text = msg.get("text", "").strip()
@@ -446,11 +508,13 @@ def process_update(update: dict[str, Any], token: str, db_path: str, load_scrape
         handle_scan_command(token, chat_id, db_path, load_scrapers_func)
     elif text_lower in ["/latest", "/list", "📋 offres (5)", "offres", "latest"]:
         handle_latest_command(token, chat_id, db_path)
+    elif text_lower in ["/domains", "/domaines", "/keywords", "/topics", "🎯 domaines", "domaines", "domains", "topics", "mots-clés"]:
+        handle_domains_command(token, chat_id, is_admin_user=admin_user)
     elif text_lower in ["/stats", "📊 stats", "stats", "statistiques"]:
         handle_stats_command(token, chat_id, db_path)
     elif text_lower in ["/users", "👥 utilisateurs", "utilisateurs", "users"]:
         handle_users_command(token, chat_id, db_path, super_admin_id)
-    elif first_word == "/invite":
+    elif text_lower in ["/invite", "🔗 lien d'invitation", "lien d'invitation", "inviter", "invite"] or first_word == "/invite":
         handle_invite_command(token, chat_id, text, db_path, super_admin_id)
     elif first_word == "/revoke":
         handle_revoke_command(token, chat_id, text, db_path, super_admin_id)
